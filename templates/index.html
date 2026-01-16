@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Seasonality Explorer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel controls">
+        <div class="brand">
+          <h1>Seasonality</h1>
+          <p>yfinance → sqlite → analytics</p>
+        </div>
+
+        <form id="query-form" class="form">
+          <label>
+            Ticker
+            <input name="ticker" type="text" value="SPX" />
+          </label>
+
+          <label>
+            Start date
+            <input name="start" type="date" value="2010-01-01" required />
+          </label>
+
+          <label>
+            End date
+            <input name="end" type="date" value="2026-01-15" required />
+          </label>
+
+          <label>
+            Interval
+            <select name="interval">
+              <option value="1d" selected>Daily</option>
+              <option value="1wk">Weekly</option>
+              <option value="1mo">Monthly</option>
+            </select>
+          </label>
+
+          <label class="checkbox">
+            <input name="force_reload" type="checkbox" />
+            Force reload from yfinance
+          </label>
+
+          <label class="checkbox">
+            <input name="view_all_dates" type="checkbox" />
+            View all dates
+          </label>
+
+          <div class="actions">
+            <button type="submit">Load data</button>
+            <button type="button" id="cache-only">Show cached only</button>
+          </div>
+        </form>
+
+        <div class="meta" id="status"></div>
+      </section>
+
+      <section class="panel results">
+        <div class="tabs">
+          <button class="tab-button active" data-tab="data">Data</button>
+          <button class="tab-button" data-tab="results">Results</button>
+          <button class="tab-button" data-tab="monthly">Monthly perf by year</button>
+        </div>
+
+        <div class="tab-panel" id="tab-results">
+          <div class="results-header">
+            <h2>Results</h2>
+            <p>Derived metrics include O/C for the day and O/O, C/C for 1-3 days.</p>
+          </div>
+          <div class="table-wrap">
+            <table id="results-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-panel active" id="tab-data">
+          <div class="results-header">
+            <h2>Data</h2>
+            <p>Only cached data from SQLite.</p>
+          </div>
+          <div class="table-wrap">
+            <table id="data-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="tab-monthly">
+          <div class="results-header">
+            <h2>Monthly perf by year</h2>
+            <p>Monthly performance (%) with years as columns and months as rows.</p>
+          </div>
+          <div class="table-wrap">
+            <table id="monthly-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
