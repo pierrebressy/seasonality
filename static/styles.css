@@ -114,6 +114,12 @@ button:hover {
   margin-bottom: 16px;
 }
 
+.current-ticker {
+  margin-bottom: 16px;
+  font-family: "Space Grotesk", "Arial", sans-serif;
+  color: var(--muted);
+}
+
 .tab-button {
   padding: 8px 14px;
   border-radius: 999px;
