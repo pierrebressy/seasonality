@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
-import calendar
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -12,8 +11,6 @@ from flask import Flask, jsonify, render_template, request
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = APP_DIR / "data" / "market.db"
 DEFAULT_SETTINGS = {
-    "default_start_date": "2010-01-01",
-    "default_end_date": "2026-01-15",
     "last_ticker": "AAPL",
 }
 
@@ -66,19 +63,6 @@ def get_setting(key: str) -> str | None:
     return row[0] if row else None
 
 
-def parse_date_safe(value: str) -> datetime.date | None:
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
-    except ValueError:
-        try:
-            year, month, day = (int(part) for part in value.split("-"))
-            last_day = calendar.monthrange(year, month)[1]
-            day = min(max(day, 1), last_day)
-            return datetime(year, month, day).date()
-        except Exception:
-            return None
-
-
 def set_setting(key: str, value: str) -> None:
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
@@ -97,19 +81,6 @@ def fetch_tickers() -> list[str]:
             "SELECT DISTINCT ticker FROM prices ORDER BY ticker"
         ).fetchall()
     return [row[0] for row in rows]
-
-
-def fetch_from_db(ticker: str, start: str, end: str) -> pd.DataFrame:
-    query = """
-        SELECT date, open, high, low, close, volume
-        FROM prices
-        WHERE ticker = ?
-          AND date >= ?
-          AND date <= ?
-        ORDER BY date
-    """
-    with sqlite3.connect(DB_PATH) as conn:
-        return pd.read_sql_query(query, conn, params=(ticker, start, end))
 
 
 def fetch_all_from_db(ticker: str) -> pd.DataFrame:
@@ -169,9 +140,6 @@ def upsert_prices(ticker: str, frame: pd.DataFrame) -> None:
 def download_prices(
     ticker: str, start: str, end: str, interval: str
 ) -> pd.DataFrame:
-    print(
-        f"🟢🟢 [download_prices] for {ticker} from {start} to {end} interval={interval}"
-    )
     data = yf.download(
         tickers=ticker,
         start=start,
@@ -218,14 +186,103 @@ def compute_features(frame: pd.DataFrame) -> pd.DataFrame:
     frame["date"] = pd.to_datetime(frame["date"])
     frame["weekday"] = frame["date"].dt.day_name().str.lower()
     frame["year"] = frame["date"].dt.year
+    frame["semester"] = ((frame["date"].dt.month - 1) // 6 + 1).astype(int)
+    frame["trimester"] = ((frame["date"].dt.month - 1) // 4 + 1).astype(int)
+    frame["decade"] = (frame["year"] // 10 * 10).astype(int)
     frame["month"] = frame["date"].dt.month
-    frame["week_of_year"] = frame["date"].dt.isocalendar().week.astype(int)
-    frame["oc_pct"] = (frame["close"] / frame["open"] - 1.0) * 100.0
-    for period in (1, 2, 3):
-        frame[f"oo_pct_{period}d"] = frame["open"].pct_change(period) * 100.0
-        frame[f"cc_pct_{period}d"] = frame["close"].pct_change(period) * 100.0
+    frame["day of year"] = frame["date"].dt.dayofyear.astype(int)
+    frame["trading day"] = (
+        frame.groupby(frame["date"].dt.year).cumcount() + 1
+    ).astype(int)
+    month_group = frame.groupby(
+        [frame["date"].dt.year, frame["date"].dt.month]
+    )
+    frame["trading day of the month"] = (month_group.cumcount() + 1).astype(int)
+    month_sizes = month_group["date"].transform("size").astype(int)
+    frame["remaining trading days in the month"] = (
+        month_sizes - frame["trading day of the month"]
+    ).astype(int)
+    trimester_group = frame.groupby([frame["year"], frame["trimester"]])
+    frame["trading day of the trimester"] = (
+        trimester_group.cumcount() + 1
+    ).astype(int)
+    trimester_sizes = trimester_group["date"].transform("size").astype(int)
+    frame["remaining trading days in the trimester"] = (
+        trimester_sizes - frame["trading day of the trimester"]
+    ).astype(int)
+    semester_group = frame.groupby([frame["year"], frame["semester"]])
+    frame["trading day of the semester"] = (
+        semester_group.cumcount() + 1
+    ).astype(int)
+    semester_sizes = semester_group["date"].transform("size").astype(int)
+    frame["remaining trading days in the semester"] = (
+        semester_sizes - frame["trading day of the semester"]
+    ).astype(int)
+    frame["week"] = frame["date"].dt.isocalendar().week.astype(int)
+    frame["cc"] = (frame["close"] / frame["close"].shift(1) - 1.0) * 100.0
+    frame["oc"] = (frame["close"] / frame["open"] - 1.0) * 100.0
+    frame["co"] = (frame["open"] / frame["close"].shift(1) - 1.0) * 100.0
+    for period in (2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 30, 42, 63, 84, 105, 126):
+        frame[f"cc -{period}"] = frame["close"].pct_change(period) * 100.0
+        frame[f"cc +{period}"] = frame["close"].pct_change(-period) * 100.0
     frame["date"] = frame["date"].dt.strftime("%Y-%m-%d")
-    return frame
+    column_order = [
+        "date",
+        "open",
+        "close",
+        "weekday",
+        "year",
+        "semester",
+        "trimester",
+        "decade",
+        "month",
+        "week",
+        "day of year",
+        "trading day",
+        "trading day of the month",
+        "remaining trading days in the month",
+        "trading day of the trimester",
+        "remaining trading days in the trimester",
+        "trading day of the semester",
+        "remaining trading days in the semester",
+        "oc",
+        "cc",
+        "co",
+        "cc -2",
+        "cc -3",
+        "cc -4",
+        "cc -5",
+        "cc -6",
+        "cc -7",
+        "cc -8",
+        "cc -9",
+        "cc -10",
+        "cc -21",
+        "cc -30",
+        "cc -42",
+        "cc -63",
+        "cc -84",
+        "cc -105",
+        "cc -126",
+        "cc +2",
+        "cc +3",
+        "cc +4",
+        "cc +5",
+        "cc +6",
+        "cc +7",
+        "cc +8",
+        "cc +9",
+        "cc +10",
+        "cc +21",
+        "cc +30",
+        "cc +42",
+        "cc +63",
+        "cc +84",
+        "cc +105",
+        "cc +126",
+    ]
+    extra_columns = [col for col in frame.columns if col not in column_order]
+    return frame[column_order + extra_columns]
 
 
 def compute_monthly_performance(frame: pd.DataFrame) -> pd.DataFrame:
@@ -269,17 +326,74 @@ def compute_monthly_performance(frame: pd.DataFrame) -> pd.DataFrame:
     return pivot
 
 
+def compute_weekday_performance(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    data = frame.copy()
+    data["date"] = pd.to_datetime(data["date"])
+    data = data.sort_values("date")
+    data["close"] = pd.to_numeric(data["close"], errors="coerce")
+    data = data.dropna(subset=["close"])
+    if data.empty:
+        return data
+    data["weekday"] = data["date"].dt.day_name().str.lower()
+    data = data.sort_values("date")
+    data["week_year"] = data["date"].dt.isocalendar().year.astype(int)
+    data["perf_pct"] = data.groupby("weekday")["close"].pct_change() * 100.0
+    summary = (
+        data.groupby(["weekday", "week_year"], as_index=False)["perf_pct"]
+        .mean()
+    )
+    pivot = summary.pivot(index="weekday", columns="week_year", values="perf_pct")
+    order = [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+    ]
+    pivot = pivot.reindex(order)
+    pivot = pivot.sort_index(axis=1)
+    pivot.index.name = "weekday"
+    pivot = pivot.reset_index()
+    return pivot
+
+
+def compute_weekday_performance_by_quarter(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    data = frame.copy()
+    data["date"] = pd.to_datetime(data["date"])
+    data = data.sort_values("date")
+    data["close"] = pd.to_numeric(data["close"], errors="coerce")
+    data = data.dropna(subset=["close"])
+    if data.empty:
+        return data
+    data["weekday"] = data["date"].dt.day_name().str.lower()
+    data["quarter"] = data["date"].dt.to_period("Q").astype(str)
+    data["perf_pct"] = data.groupby("weekday")["close"].pct_change() * 100.0
+    summary = (
+        data.groupby(["weekday", "quarter"], as_index=False)["perf_pct"]
+        .mean()
+    )
+    pivot = summary.pivot(index="weekday", columns="quarter", values="perf_pct")
+    order = [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+    ]
+    pivot = pivot.reindex(order)
+    pivot = pivot.sort_index(axis=1)
+    pivot.index.name = "weekday"
+    pivot = pivot.reset_index()
+    return pivot
+
+
 @app.route("/")
 def index():
     init_db()
-    default_start = (
-        get_setting("default_start_date")
-        or DEFAULT_SETTINGS["default_start_date"]
-    )
-    default_end = (
-        get_setting("default_end_date")
-        or DEFAULT_SETTINGS["default_end_date"]
-    )
     default_ticker = (
         get_setting("last_ticker") or DEFAULT_SETTINGS["last_ticker"]
     )
@@ -290,8 +404,6 @@ def index():
         tickers.insert(0, default_ticker)
     return render_template(
         "index.html",
-        default_start=default_start,
-        default_end=default_end,
         default_ticker=default_ticker,
         tickers=tickers,
     )
@@ -302,69 +414,53 @@ def api_data():
     payload = request.get_json(force=True)
     raw_ticker = payload.get("ticker", "AAPL")
     ticker = normalize_ticker(raw_ticker)
-    start = payload.get("start")
-    end = payload.get("end")
-    interval = payload.get("interval", "1d")
-    force_reload = bool(payload.get("force_reload", False))
-    cache_only = bool(payload.get("cache_only", False))
+    action = payload.get("action", "cached")
     raw_only = bool(payload.get("raw_only", False))
-    view_all_dates = bool(payload.get("view_all_dates", False))
 
     app.logger.info(
-        "api_data request ticker=%s resolved=%s start=%s end=%s interval=%s force=%s cache_only=%s view_all=%s raw_only=%s",
+        "api_data request ticker=%s resolved=%s action=%s raw_only=%s",
         raw_ticker,
         ticker,
-        start,
-        end,
-        interval,
-        force_reload,
-        cache_only,
-        view_all_dates,
+        action,
         raw_only,
     )
-
-    if not start or not end:
-        return jsonify({"error": "start and end are required"}), 400
-    start_date = parse_date_safe(start)
-    end_date = parse_date_safe(end)
-    if not start_date or not end_date:
-        return jsonify({"error": "start and end must be YYYY-MM-DD"}), 400
-
-    if start_date > end_date:
-        return jsonify({"error": "start date must be before end date"}), 400
-
-    if not (cache_only and view_all_dates):
-        today = datetime.now(timezone.utc).date()
-        if start_date > today or end_date > today:
-            return jsonify({"error": "date range is in the future"}), 400
 
     init_db()
     set_setting("last_ticker", raw_ticker)
 
-    existing = (
-        fetch_all_from_db(ticker)
-        if view_all_dates
-        else fetch_from_db(ticker, start, end)
-    )
-    should_download = force_reload or existing.empty
+    today = datetime.now(timezone.utc).date()
+    yesterday = today - timedelta(days=1)
 
-    if cache_only:
-        should_download = False
-
-    if should_download:
-        app.logger.info("Downloading data from yfinance for %s", ticker)
-        downloaded = download_prices(ticker, start, end, interval)
+    message = None
+    if action == "new":
+        start = "2020-01-01"
+        end = yesterday.strftime("%Y-%m-%d")
+        app.logger.info("Downloading new data for %s from %s to %s", ticker, start, end)
+        downloaded = download_prices(ticker, start, end, "1d")
         if downloaded.empty:
             return jsonify({"error": "no data returned from yfinance"}), 404
         upsert_prices(ticker, downloaded)
-        existing = (
-            fetch_all_from_db(ticker)
-            if view_all_dates
-            else fetch_from_db(ticker, start, end)
+    elif action == "update":
+        min_date, max_date = fetch_date_bounds(ticker)
+        if not max_date:
+            return jsonify({"error": "no cached data to update"}), 404
+        start_date = datetime.strptime(max_date, "%Y-%m-%d").date() + timedelta(
+            days=1
         )
-        app.logger.info("Stored %s rows into SQLite", len(existing))
-    elif existing.empty:
-        return jsonify({"error": "no cached data for this range"}), 404
+        if start_date > yesterday:
+            message = "already up to date"
+        start = start_date.strftime("%Y-%m-%d")
+        end = yesterday.strftime("%Y-%m-%d")
+        if not message:
+            app.logger.info("Updating data for %s from %s to %s", ticker, start, end)
+            downloaded = download_prices(ticker, start, end, "1d")
+            if downloaded.empty:
+                return jsonify({"error": "no data returned from yfinance"}), 404
+            upsert_prices(ticker, downloaded)
+
+    existing = fetch_all_from_db(ticker)
+    if existing.empty:
+        return jsonify({"error": "no cached data for this ticker"}), 404
 
     if raw_only:
         raw = existing[
@@ -374,6 +470,9 @@ def api_data():
         rows = raw.fillna("").values.tolist()
     else:
         enriched = compute_features(existing)
+        enriched = enriched.drop(
+            columns=["high", "low", "volume"], errors="ignore"
+        )
         columns = enriched.columns.tolist()
         rows = enriched.fillna("").values.tolist()
 
@@ -383,7 +482,8 @@ def api_data():
             "resolved_ticker": ticker,
             "rows": rows,
             "columns": columns,
-            "downloaded": should_download,
+            "downloaded": action in ("new", "update") and not message,
+            "message": message,
         }
     )
 
@@ -393,57 +493,71 @@ def api_monthly():
     payload = request.get_json(force=True)
     raw_ticker = payload.get("ticker", "AAPL")
     ticker = normalize_ticker(raw_ticker)
-    start = payload.get("start")
-    end = payload.get("end")
-    interval = payload.get("interval", "1d")
-    force_reload = bool(payload.get("force_reload", False))
-    cache_only = bool(payload.get("cache_only", False))
-    view_all_dates = bool(payload.get("view_all_dates", False))
-
-    if not start or not end:
-        return jsonify({"error": "start and end are required"}), 400
-    start_date = parse_date_safe(start)
-    end_date = parse_date_safe(end)
-    if not start_date or not end_date:
-        return jsonify({"error": "start and end must be YYYY-MM-DD"}), 400
-
-    if start_date > end_date:
-        return jsonify({"error": "start date must be before end date"}), 400
-
-    if not (cache_only and view_all_dates):
-        today = datetime.now(timezone.utc).date()
-        if start_date > today or end_date > today:
-            return jsonify({"error": "date range is in the future"}), 400
 
     init_db()
     set_setting("last_ticker", raw_ticker)
 
-    existing = (
-        fetch_all_from_db(ticker)
-        if view_all_dates
-        else fetch_from_db(ticker, start, end)
-    )
-    should_download = force_reload or existing.empty
-
-    if cache_only:
-        should_download = False
-
-    if should_download:
-        downloaded = download_prices(ticker, start, end, interval)
-        if downloaded.empty:
-            return jsonify({"error": "no data returned from yfinance"}), 404
-        upsert_prices(ticker, downloaded)
-        existing = (
-            fetch_all_from_db(ticker)
-            if view_all_dates
-            else fetch_from_db(ticker, start, end)
-        )
-    elif existing.empty:
-        return jsonify({"error": "no cached data for this range"}), 404
+    existing = fetch_all_from_db(ticker)
+    if existing.empty:
+        return jsonify({"error": "no cached data for this ticker"}), 404
 
     monthly = compute_monthly_performance(existing)
     columns = monthly.columns.tolist()
     rows = monthly.fillna("").values.tolist()
+
+    return jsonify(
+        {
+            "ticker": raw_ticker,
+            "resolved_ticker": ticker,
+            "rows": rows,
+            "columns": columns,
+        }
+    )
+
+
+@app.route("/api/weekday", methods=["POST"])
+def api_weekday():
+    payload = request.get_json(force=True)
+    raw_ticker = payload.get("ticker", "AAPL")
+    ticker = normalize_ticker(raw_ticker)
+
+    init_db()
+    set_setting("last_ticker", raw_ticker)
+
+    existing = fetch_all_from_db(ticker)
+    if existing.empty:
+        return jsonify({"error": "no cached data for this ticker"}), 404
+
+    weekly = compute_weekday_performance(existing)
+    columns = weekly.columns.tolist()
+    rows = weekly.fillna("").values.tolist()
+
+    return jsonify(
+        {
+            "ticker": raw_ticker,
+            "resolved_ticker": ticker,
+            "rows": rows,
+            "columns": columns,
+        }
+    )
+
+
+@app.route("/api/weekday-quarter", methods=["POST"])
+def api_weekday_quarter():
+    payload = request.get_json(force=True)
+    raw_ticker = payload.get("ticker", "AAPL")
+    ticker = normalize_ticker(raw_ticker)
+
+    init_db()
+    set_setting("last_ticker", raw_ticker)
+
+    existing = fetch_all_from_db(ticker)
+    if existing.empty:
+        return jsonify({"error": "no cached data for this ticker"}), 404
+
+    weekly = compute_weekday_performance_by_quarter(existing)
+    columns = weekly.columns.tolist()
+    rows = weekly.fillna("").values.tolist()
 
     return jsonify(
         {

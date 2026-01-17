@@ -30,33 +30,10 @@
             <input name="new_ticker" type="text" placeholder="e.g. AAPL" />
           </label>
 
-          <label>
-            Start date
-            <input name="start" type="date" value="{{ default_start }}" required />
-          </label>
-
-          <label>
-            End date
-            <input name="end" type="date" value="{{ default_end }}" required />
-          </label>
-
-          <label>
-            Interval
-            <select name="interval">
-              <option value="1d" selected>Daily</option>
-              <option value="1wk">Weekly</option>
-              <option value="1mo">Monthly</option>
-            </select>
-          </label>
-
-          <label class="checkbox">
-            <input name="view_all_dates" type="checkbox" />
-            View all dates
-          </label>
-
           <div class="actions">
             <button type="submit">Load data</button>
             <button type="button" id="cache-only">Show cached only</button>
+            <button type="button" id="update-data">Update data</button>
           </div>
         </form>
 
@@ -68,6 +45,8 @@
           <button class="tab-button active" data-tab="data">Data</button>
           <button class="tab-button" data-tab="results">Results</button>
           <button class="tab-button" data-tab="monthly">Monthly perf by year</button>
+          <button class="tab-button" data-tab="weekday">Mean weekday performance by year</button>
+          <button class="tab-button" data-tab="weekday-quarter">Mean weekday performance by quarter</button>
         </div>
 
         <div class="current-ticker" id="current-ticker">Ticker: --</div>
@@ -88,6 +67,9 @@
           <div class="results-header">
             <h2>Data</h2>
           </div>
+          <div class="data-actions">
+            <button type="button" id="export-data">Export CSV</button>
+          </div>
           <div class="table-wrap">
             <table id="data-table">
               <thead></thead>
@@ -102,6 +84,30 @@
           </div>
           <div class="table-wrap">
             <table id="monthly-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="tab-weekday">
+          <div class="results-header">
+            <h2>Mean weekday performance by year</h2>
+          </div>
+          <div class="table-wrap">
+            <table id="weekday-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="tab-weekday-quarter">
+          <div class="results-header">
+            <h2>Mean weekday performance by quarter</h2>
+          </div>
+          <div class="table-wrap">
+            <table id="weekday-quarter-table">
               <thead></thead>
               <tbody></tbody>
             </table>

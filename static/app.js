@@ -1,10 +1,14 @@
 const form = document.getElementById("query-form");
 const cacheOnlyButton = document.getElementById("cache-only");
+const updateDataButton = document.getElementById("update-data");
 const statusEl = document.getElementById("status");
 const currentTickerEl = document.getElementById("current-ticker");
 const resultsTable = document.getElementById("results-table");
 const dataTable = document.getElementById("data-table");
 const monthlyTable = document.getElementById("monthly-table");
+const weekdayTable = document.getElementById("weekday-table");
+const weekdayQuarterTable = document.getElementById("weekday-quarter-table");
+const exportDataButton = document.getElementById("export-data");
 const tickerSelect = document.getElementById("ticker-select");
 const newTickerInput = document.querySelector("input[name='new_ticker']");
 const tabButtons = document.querySelectorAll(".tab-button");
@@ -40,6 +44,28 @@ function clearTable(tableEl) {
   sortStates.delete(tableEl);
 }
 
+function tableToCsv(tableEl) {
+  const rows = Array.from(tableEl.querySelectorAll("tr")).map((row) =>
+    Array.from(row.querySelectorAll("th, td")).map((cell) => {
+      const text = cell.textContent || "";
+      const escaped = text.replace(/"/g, '""');
+      return `"${escaped}"`;
+    })
+  );
+  return rows.map((row) => row.join(",")).join("\n");
+}
+
+function downloadCsv(filename, csvText) {
+  const blob = new Blob([csvText], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(link.href);
+}
+
 function renderTable(tableEl, columns, rows, options = {}) {
   const thead = tableEl.querySelector("thead");
   const tbody = tableEl.querySelector("tbody");
@@ -47,8 +73,47 @@ function renderTable(tableEl, columns, rows, options = {}) {
   tbody.innerHTML = "";
 
   const priceColumns = new Set(["open", "high", "low", "close"]);
+  const percentColumns = new Set([
+    "cc",
+    "oc",
+    "co",
+    "cc -2",
+    "cc -3",
+    "cc -4",
+    "cc -5",
+    "cc -6",
+    "cc -7",
+    "cc -8",
+    "cc -9",
+    "cc -10",
+    "cc -21",
+    "cc -30",
+    "cc -42",
+    "cc -63",
+    "cc -84",
+    "cc -105",
+    "cc -126",
+    "cc +2",
+    "cc +3",
+    "cc +4",
+    "cc +5",
+    "cc +6",
+    "cc +7",
+    "cc +8",
+    "cc +9",
+    "cc +10",
+    "cc +21",
+    "cc +30",
+    "cc +42",
+    "cc +63",
+    "cc +84",
+    "cc +105",
+    "cc +126",
+  ]);
   const sortState = sortStates.get(tableEl) || null;
   const percentAll = Boolean(options.percentAll);
+  const percentPrecision =
+    typeof options.percentPrecision === "number" ? options.percentPrecision : 2;
   const heatmap = Boolean(options.heatmap);
   let heatmapRange = null;
   if (heatmap) {
@@ -134,9 +199,14 @@ function renderTable(tableEl, columns, rows, options = {}) {
         tr.appendChild(td);
         return;
       }
-      if ((colNameText.includes("_pct") || (percentAll && index > 0)) && cell !== "") {
+      if ((percentColumns.has(colNameText) || (percentAll && index > 0)) && cell !== "") {
+        const precision = percentColumns.has(colNameText)
+          ? colNameText === "oo_1d" || colNameText === "cc"
+            ? 1
+            : 2
+          : percentPrecision;
         td.textContent = Number.isFinite(number)
-          ? `${number.toFixed(2)}%`
+          ? `${number.toFixed(precision)}%`
           : cell;
         if (heatmap && heatmapRange && Number.isFinite(number) && index > 0) {
           const span = heatmapRange.max - heatmapRange.min || 1;
@@ -161,19 +231,16 @@ function renderTable(tableEl, columns, rows, options = {}) {
 function buildPayload(options = {}) {
   const formData = new FormData(form);
   const newTicker = String(formData.get("new_ticker") || "").trim();
+  const action = options.action
+    ? options.action
+    : newTicker
+    ? "new"
+    : "cached";
   const payload = {
     ticker: newTicker || formData.get("ticker"),
-    start: formData.get("start"),
-    end: formData.get("end"),
-    interval: formData.get("interval"),
-    force_reload: false,
-    cache_only: Boolean(options.cacheOnly),
+    action,
     raw_only: Boolean(options.rawOnly),
-    view_all_dates: formData.get("view_all_dates") === "on",
   };
-  if (typeof options.viewAllDates !== "undefined") {
-    payload.view_all_dates = Boolean(options.viewAllDates);
-  }
   return payload;
 }
 
@@ -193,15 +260,17 @@ async function submitQuery(options = {}) {
     const data = await response.json();
     if (!response.ok) {
       statusEl.textContent = data.error || "Request failed.";
-      const targetTable = options.cacheOnly ? dataTable : resultsTable;
+      const targetTable = options.target === "data" ? dataTable : resultsTable;
       clearTable(targetTable);
       return false;
     }
 
-    const targetTable = options.cacheOnly ? dataTable : resultsTable;
+    const targetTable = options.target === "data" ? dataTable : resultsTable;
     renderTable(targetTable, data.columns, data.rows);
-    if (payload.cache_only) {
+    if (payload.action === "cached" && payload.raw_only) {
       statusEl.textContent = "Loaded cached data only.";
+    } else if (data.message) {
+      statusEl.textContent = data.message;
     } else {
       statusEl.textContent = data.downloaded
         ? "Data downloaded from yfinance."
@@ -218,7 +287,7 @@ async function submitQuery(options = {}) {
     return true;
   } catch (error) {
     statusEl.textContent = "Unable to reach the API.";
-    const targetTable = options.cacheOnly ? dataTable : resultsTable;
+    const targetTable = options.target === "data" ? dataTable : resultsTable;
     clearTable(targetTable);
     return false;
   }
@@ -248,39 +317,108 @@ async function submitMonthly(options = {}) {
   }
 }
 
+async function submitWeekday(options = {}) {
+  const payload = buildPayload(options);
+  console.log("submitWeekday", payload);
+  try {
+    const response = await fetch("/api/weekday", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      clearTable(weekdayTable);
+      return;
+    }
+    renderTable(weekdayTable, data.columns, data.rows, {
+      percentAll: true,
+      percentPrecision: 1,
+      heatmap: true,
+    });
+  } catch (error) {
+    clearTable(weekdayTable);
+  }
+}
+
+async function submitWeekdayQuarter(options = {}) {
+  const payload = buildPayload(options);
+  console.log("submitWeekdayQuarter", payload);
+  try {
+    const response = await fetch("/api/weekday-quarter", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      clearTable(weekdayQuarterTable);
+      return;
+    }
+    renderTable(weekdayQuarterTable, data.columns, data.rows, {
+      percentAll: true,
+      percentPrecision: 1,
+      heatmap: true,
+    });
+  } catch (error) {
+    clearTable(weekdayQuarterTable);
+  }
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (autoRefreshTimer) {
     clearTimeout(autoRefreshTimer);
     autoRefreshTimer = null;
   }
-  const ok = await submitQuery();
+  const ok = await submitQuery({ target: "results" });
   if (ok) {
-    submitQuery({ cacheOnly: true, rawOnly: true });
-    submitMonthly({ cacheOnly: true, viewAllDates: true });
+    submitQuery({ action: "cached", rawOnly: true, target: "data" });
+    submitMonthly();
+    submitWeekday();
+    submitWeekdayQuarter();
   }
 });
 
 cacheOnlyButton.addEventListener("click", () => {
-  submitQuery({ cacheOnly: true, rawOnly: true });
-  submitMonthly({ cacheOnly: true, viewAllDates: true });
+  submitQuery({ action: "cached", rawOnly: true, target: "data" });
+  submitMonthly();
+  submitWeekday();
+  submitWeekdayQuarter();
+});
+
+updateDataButton.addEventListener("click", async () => {
+  const ok = await submitQuery({ action: "update", target: "results" });
+  if (ok) {
+    submitQuery({ action: "cached", rawOnly: true, target: "data" });
+    submitMonthly();
+    submitWeekday();
+    submitWeekdayQuarter();
+  }
 });
 
 window.addEventListener("DOMContentLoaded", () => {
-  submitQuery();
-  submitQuery({ cacheOnly: true, rawOnly: true });
-  submitMonthly({ cacheOnly: true, viewAllDates: true });
+  submitQuery({ action: "cached", target: "results" });
+  submitQuery({ action: "cached", rawOnly: true, target: "data" });
+  submitMonthly();
+  submitWeekday();
+  submitWeekdayQuarter();
 });
 
-form.addEventListener("change", () => {
+form.addEventListener("change", (event) => {
   console.log("form change detected");
+  if (event.target !== tickerSelect) {
+    return;
+  }
   if (autoRefreshTimer) {
     clearTimeout(autoRefreshTimer);
   }
   autoRefreshTimer = setTimeout(() => {
-    submitQuery();
-    submitQuery({ cacheOnly: true, rawOnly: true });
-    submitMonthly({ cacheOnly: true, viewAllDates: true });
+    submitQuery({ action: "cached", target: "results" });
+    submitQuery({ action: "cached", rawOnly: true, target: "data" });
+    submitMonthly();
+    submitWeekday();
+    submitWeekdayQuarter();
     autoRefreshTimer = null;
   }, 300);
 });
@@ -295,4 +433,15 @@ tabButtons.forEach((button) => {
       .getElementById(`tab-${tabName}`)
       .classList.add("active");
   });
+});
+
+exportDataButton.addEventListener("click", () => {
+  const csv = tableToCsv(dataTable);
+  if (!csv.trim()) {
+    statusEl.textContent = "No data to export.";
+    return;
+  }
+  const ticker = tickerSelect ? tickerSelect.value : "data";
+  const filename = `${ticker}_data.csv`;
+  downloadCsv(filename, csv);
 });

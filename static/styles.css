@@ -120,6 +120,16 @@ button:hover {
   color: var(--muted);
 }
 
+.data-actions {
+  margin-bottom: 12px;
+}
+
+.data-actions button {
+  background: #fffdfa;
+  border: 1px solid var(--border);
+  color: var(--ink);
+}
+
 .tab-button {
   padding: 8px 14px;
   border-radius: 999px;
@@ -176,6 +186,16 @@ td {
   border-bottom: 1px solid var(--border);
   text-align: right;
   white-space: nowrap;
+}
+
+.table-wrap th {
+  white-space: normal;
+}
+
+.table-wrap th span {
+  display: inline-block;
+  max-width: 150px;
+  line-height: 1.2;
 }
 
 .sort-indicator {
