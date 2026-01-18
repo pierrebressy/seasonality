@@ -1,5 +1,8 @@
 # seasonality
 
+- Various tools for analyzing and visualizing seasonality in time series data.
+- Data are stored in a sqlite database located at `data/market.db`.
+
 ## Python venv setup
 
 ```bash
