@@ -14,6 +14,16 @@ DB_PATH = APP_DIR / "data" / "market.db"
 DEFAULT_SETTINGS = {
     "last_ticker": "AAPL",
 }
+INDEX_TICKERS = [
+    "^VIX",
+    "^VIX9D",
+    "^VIX3M",
+    "^VIX6M",
+    "^SKEW",
+    "^SDEX",
+    "^TDEX",
+    "^VOLI",
+]
 
 app = Flask(__name__)
 
@@ -661,6 +671,47 @@ def api_data():
             "message": message,
         }
     )
+
+
+@app.route("/api/update-indexes", methods=["POST"])
+def api_update_indexes():
+    init_db()
+    today = datetime.now(timezone.utc).date()
+    yesterday = today - timedelta(days=1)
+    results = []
+
+    for raw_ticker in INDEX_TICKERS:
+        ticker = normalize_ticker(raw_ticker)
+        min_date, max_date = fetch_date_bounds(ticker)
+        if max_date:
+            start_date = datetime.strptime(max_date, "%Y-%m-%d").date() + timedelta(
+                days=1
+            )
+            if start_date > yesterday:
+                results.append(
+                    {"ticker": raw_ticker, "status": "ok", "message": "up to date"}
+                )
+                continue
+            start = start_date.strftime("%Y-%m-%d")
+        else:
+            start = "2020-01-01"
+        end = yesterday.strftime("%Y-%m-%d")
+        downloaded = download_prices(ticker, start, end, "1d")
+        if downloaded.empty:
+            results.append(
+                {"ticker": raw_ticker, "status": "error", "message": "no data"}
+            )
+            continue
+        upsert_prices(ticker, downloaded)
+        results.append(
+            {
+                "ticker": raw_ticker,
+                "status": "ok",
+                "message": f"updated {start} to {end}",
+            }
+        )
+
+    return jsonify({"results": results})
 
 
 @app.route("/api/monthly", methods=["POST"])

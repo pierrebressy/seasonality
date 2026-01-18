@@ -1,6 +1,7 @@
 const form = document.getElementById("query-form");
 const cacheOnlyButton = document.getElementById("cache-only");
 const updateDataButton = document.getElementById("update-data");
+const updateIndexesButton = document.getElementById("update-indexes");
 const statusEl = document.getElementById("status");
 const currentTickerEl = document.getElementById("current-ticker");
 const resultsTable = document.getElementById("results-table");
@@ -661,6 +662,39 @@ updateDataButton.addEventListener("click", async () => {
     submitWeekdayQuarter();
   }
 });
+
+if (updateIndexesButton) {
+  updateIndexesButton.addEventListener("click", async () => {
+    statusEl.textContent = "Updating indexes...";
+    try {
+      const response = await fetch("/api/update-indexes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        statusEl.textContent = data.error || "Index update failed.";
+        return;
+      }
+      const failures = (data.results || []).filter(
+        (entry) => entry.status !== "ok"
+      );
+      if (failures.length) {
+        statusEl.textContent = `Updated with ${failures.length} errors.`;
+      } else {
+        statusEl.textContent = "Indexes updated.";
+      }
+      submitQuery({ action: "cached", target: "results" });
+      submitQuery({ action: "cached", rawOnly: true, target: "data" });
+      submitMonthly();
+      submitWeekday();
+      submitWeekdayQuarter();
+    } catch (error) {
+      statusEl.textContent = "Unable to reach the API.";
+    }
+  });
+}
 
 window.addEventListener("DOMContentLoaded", () => {
   submitQuery({ action: "cached", target: "results" });
