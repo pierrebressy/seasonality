@@ -10,6 +10,7 @@ const variationTable = document.getElementById("variation-table");
 const graphSourceA = document.getElementById("graph-source-a");
 const graphSourceB = document.getElementById("graph-source-b");
 const graphAEl = document.getElementById("graph-a");
+const vixTable = document.getElementById("vix-table");
 const monthlyTable = document.getElementById("monthly-table");
 const weekdayTable = document.getElementById("weekday-table");
 const weekdayQuarterTable = document.getElementById("weekday-quarter-table");
@@ -87,7 +88,16 @@ function renderTable(tableEl, columns, rows, options = {}) {
   thead.innerHTML = "";
   tbody.innerHTML = "";
 
-  const priceColumns = new Set(["open", "high", "low", "close", "lower", "higher"]);
+  const priceColumns = new Set([
+    "open",
+    "high",
+    "low",
+    "close",
+    "lower",
+    "higher",
+    "^VIX",
+    "^VIX3M",
+  ]);
   const percentColumns = new Set([
     "cc",
     "oc",
@@ -204,7 +214,7 @@ function renderTable(tableEl, columns, rows, options = {}) {
   });
   thead.appendChild(headRow);
 
-  rows.forEach((row) => {
+  rows.forEach((row, rowIndex) => {
     const tr = document.createElement("tr");
     row.forEach((cell, index) => {
       const td = document.createElement("td");
@@ -213,6 +223,9 @@ function renderTable(tableEl, columns, rows, options = {}) {
       const number = Number(cell);
       if (priceColumns.has(colName) && cell !== "") {
         td.textContent = Number.isFinite(number) ? number.toFixed(2) : cell;
+        if (options.decorateCell) {
+          options.decorateCell(td, colNameText, cell, row, rowIndex);
+        }
         tr.appendChild(td);
         return;
       }
@@ -235,10 +248,24 @@ function renderTable(tableEl, columns, rows, options = {}) {
           const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
           td.style.color = luminance > 0.6 ? "#1b1a18" : "#fff9f2";
         }
+        if (options.decorateCell) {
+          options.decorateCell(td, colNameText, cell, row, rowIndex);
+        }
+        tr.appendChild(td);
+        return;
+      }
+      if (colNameText === "C/B" && cell !== "") {
+        td.textContent = Number.isFinite(number) ? number.toFixed(2) : cell;
+        if (options.decorateCell) {
+          options.decorateCell(td, colNameText, cell, row, rowIndex);
+        }
         tr.appendChild(td);
         return;
       }
       td.textContent = cell;
+      if (options.decorateCell) {
+        options.decorateCell(td, colNameText, cell, row, rowIndex);
+      }
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -903,6 +930,42 @@ async function submitWeekdayQuarter(options = {}) {
   }
 }
 
+async function submitVix() {
+  if (!vixTable) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/vix", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      clearTable(vixTable);
+      return;
+    }
+    renderTable(vixTable, data.columns, data.rows, {
+      decorateCell: (cell, colName, value) => {
+        if (colName !== "C/B") {
+          return;
+        }
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return;
+        }
+        if (numeric >= 1) {
+          cell.classList.add("contango-cell");
+        } else {
+          cell.classList.add("backwardation-cell");
+        }
+      },
+    });
+  } catch (error) {
+    clearTable(vixTable);
+  }
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (autoRefreshTimer) {
@@ -915,6 +978,7 @@ form.addEventListener("submit", async (event) => {
     submitMonthly();
     submitWeekday();
     submitWeekdayQuarter();
+    submitVix();
   }
 });
 
@@ -923,6 +987,7 @@ cacheOnlyButton.addEventListener("click", () => {
   submitMonthly();
   submitWeekday();
   submitWeekdayQuarter();
+  submitVix();
 });
 
 updateDataButton.addEventListener("click", async () => {
@@ -932,6 +997,7 @@ updateDataButton.addEventListener("click", async () => {
     submitMonthly();
     submitWeekday();
     submitWeekdayQuarter();
+    submitVix();
   }
 });
 
@@ -962,6 +1028,7 @@ if (updateIndexesButton) {
       submitMonthly();
       submitWeekday();
       submitWeekdayQuarter();
+      submitVix();
     } catch (error) {
       statusEl.textContent = "Unable to reach the API.";
     }
@@ -974,6 +1041,7 @@ window.addEventListener("DOMContentLoaded", () => {
   submitMonthly();
   submitWeekday();
   submitWeekdayQuarter();
+  submitVix();
   if (variationRange) {
     updateVariationValueDisplay(Number(variationRange.value || 1));
   }
@@ -993,6 +1061,7 @@ form.addEventListener("change", (event) => {
     submitMonthly();
     submitWeekday();
     submitWeekdayQuarter();
+    submitVix();
     autoRefreshTimer = null;
   }, 300);
 });

@@ -787,6 +787,27 @@ def api_weekday():
     )
 
 
+@app.route("/api/vix", methods=["POST"])
+def api_vix():
+    init_db()
+    vix = fetch_all_from_db("^VIX")
+    vix3m = fetch_all_from_db("^VIX3M")
+    if vix.empty or vix3m.empty:
+        return jsonify({"error": "missing VIX data"}), 404
+    vix = vix[["date", "close"]].rename(columns={"close": "^VIX"})
+    vix3m = vix3m[["date", "close"]].rename(columns={"close": "^VIX3M"})
+    merged = pd.merge(vix, vix3m, on="date", how="inner").sort_values("date")
+    merged["C/B"] = merged["^VIX"] / merged["^VIX3M"]
+    columns = ["date", "^VIX", "^VIX3M", "C/B"]
+    rows = (
+        merged[columns]
+        .astype(object)
+        .where(pd.notna(merged[columns]), "")
+        .values.tolist()
+    )
+    return jsonify({"columns": columns, "rows": rows})
+
+
 @app.route("/api/weekday-quarter", methods=["POST"])
 def api_weekday_quarter():
     payload = request.get_json(force=True)

@@ -267,6 +267,14 @@ tbody tr:nth-child(even) {
   outline-offset: -2px;
 }
 
+.contango-cell {
+  background: #e3f4ea;
+}
+
+.backwardation-cell {
+  background: #f8e1e1;
+}
+
 @media (max-width: 960px) {
   .layout {
     grid-template-columns: 1fr;
