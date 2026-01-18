@@ -7,6 +7,9 @@ const currentTickerEl = document.getElementById("current-ticker");
 const resultsTable = document.getElementById("results-table");
 const dataTable = document.getElementById("data-table");
 const variationTable = document.getElementById("variation-table");
+const graphSourceA = document.getElementById("graph-source-a");
+const graphSourceB = document.getElementById("graph-source-b");
+const graphAEl = document.getElementById("graph-a");
 const monthlyTable = document.getElementById("monthly-table");
 const weekdayTable = document.getElementById("weekday-table");
 const weekdayQuarterTable = document.getElementById("weekday-quarter-table");
@@ -22,6 +25,10 @@ let cachedRawData = null;
 let variationMeta = null;
 const variationRange = document.getElementById("variation-range");
 const variationValue = document.getElementById("variation-value");
+let chartA = null;
+const graphDataCache = new Map();
+let graphSettings = null;
+let graphSettingsApplied = false;
 
 function updateTickerList(ticker) {
   if (!tickerSelect || !ticker) {
@@ -41,6 +48,7 @@ function updateTickerList(ticker) {
     tickerSelect.appendChild(option);
   }
   tickerSelect.value = value;
+  populateGraphSelects();
 }
 
 function clearTable(tableEl) {
@@ -311,6 +319,268 @@ function updateVariationValueDisplay(value) {
   }
 }
 
+function ensureChartInstance(element) {
+  if (!element || typeof window.echarts === "undefined") {
+    return null;
+  }
+  return window.echarts.getInstanceByDom(element) || window.echarts.init(element);
+}
+
+async function loadGraphSettings() {
+  try {
+    const response = await fetch("/api/settings");
+    const data = await response.json();
+    if (data.graph_settings) {
+      graphSettings = JSON.parse(data.graph_settings);
+    }
+  } catch (error) {
+    graphSettings = null;
+  }
+}
+
+async function saveGraphSettings() {
+  if (!graphSourceA || !graphSourceB) {
+    return;
+  }
+  const settings = {
+    tickerA: graphSourceA.value || null,
+    tickerB: graphSourceB.value || null,
+  };
+  graphSettings = settings;
+  try {
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ graph_settings: settings }),
+    });
+  } catch (error) {
+    return;
+  }
+}
+
+function populateGraphSelects() {
+  if (!graphSourceA || !graphSourceB || !tickerSelect) {
+    return;
+  }
+  const previousA = graphSourceA.value;
+  const previousB = graphSourceB.value;
+  graphSourceA.innerHTML = "";
+  graphSourceB.innerHTML = "";
+  Array.from(tickerSelect.options).forEach((option) => {
+    const optionA = document.createElement("option");
+    optionA.value = option.value;
+    optionA.textContent = option.textContent;
+    graphSourceA.appendChild(optionA);
+    const optionB = document.createElement("option");
+    optionB.value = option.value;
+    optionB.textContent = option.textContent;
+    graphSourceB.appendChild(optionB);
+  });
+  const availableTickers = Array.from(tickerSelect.options).map(
+    (option) => option.value
+  );
+  if (availableTickers.includes(previousA)) {
+    graphSourceA.value = previousA;
+  } else if (tickerSelect.value) {
+    graphSourceA.value = tickerSelect.value;
+  }
+  if (availableTickers.includes(previousB)) {
+    graphSourceB.value = previousB;
+  } else if (availableTickers.length > 1) {
+    graphSourceB.value = availableTickers[1];
+  }
+  if (!graphSettingsApplied && graphSettings) {
+    if (availableTickers.includes(graphSettings.tickerA)) {
+      graphSourceA.value = graphSettings.tickerA;
+    }
+    if (availableTickers.includes(graphSettings.tickerB)) {
+      graphSourceB.value = graphSettings.tickerB;
+    }
+    graphSettingsApplied = true;
+  }
+}
+
+function buildSeries(columns, rows) {
+  const dateIndex = columns.indexOf("date");
+  const closeIndex = columns.indexOf("close");
+  if (dateIndex === -1 || closeIndex === -1) {
+    return { dates: [], values: [], valueMap: new Map() };
+  }
+  const data = rows.map((row) => ({
+    date: row[dateIndex],
+    value: Number(row[closeIndex]),
+  }));
+  data.sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+  const valueMap = new Map();
+  data.forEach((entry) => {
+    valueMap.set(entry.date, Number.isFinite(entry.value) ? entry.value : null);
+  });
+  return {
+    dates: data.map((entry) => entry.date),
+    values: data.map((entry) =>
+      Number.isFinite(entry.value) ? entry.value : null
+    ),
+    valueMap,
+  };
+}
+
+function renderGraph(chart, dates, seriesList) {
+  if (!chart) {
+    return;
+  }
+  chart.setOption(
+    {
+      tooltip: {
+        trigger: "axis",
+      },
+    grid: {
+      left: 40,
+      right: 16,
+      top: 36,
+      bottom: 28,
+    },
+    xAxis: {
+      type: "category",
+      data: dates,
+      axisLabel: {
+        hideOverlap: true,
+      },
+    },
+    yAxis: [
+      {
+        type: "value",
+        scale: true,
+        position: "left",
+      },
+      {
+        type: "value",
+        scale: true,
+        position: "right",
+      },
+    ],
+    series: seriesList.map((seriesItem, index) => ({
+      name: seriesItem.name,
+      data: seriesItem.values,
+      type: "line",
+      showSymbol: false,
+      smooth: true,
+      yAxisIndex: index === 0 ? 0 : 1,
+    })),
+    legend: {
+      top: 0,
+    },
+    dataZoom: [
+      {
+        type: "inside",
+        xAxisIndex: 0,
+        filterMode: "none",
+      },
+      {
+        type: "slider",
+        xAxisIndex: 0,
+        filterMode: "none",
+      },
+      {
+        type: "inside",
+        yAxisIndex: [0, 1],
+        filterMode: "none",
+      },
+      {
+        type: "slider",
+        yAxisIndex: [0, 1],
+        filterMode: "none",
+        right: 10,
+      },
+    ],
+    toolbox: {
+      feature: {
+        dataZoom: {
+          yAxisIndex: [0, 1],
+        },
+        restore: {},
+      },
+    },
+  },
+  { notMerge: true }
+  );
+}
+
+async function fetchGraphData(ticker) {
+  if (!ticker) {
+    return null;
+  }
+  if (graphDataCache.has(ticker)) {
+    return graphDataCache.get(ticker);
+  }
+  const payload = {
+    ticker,
+    action: "cached",
+    raw_only: true,
+  };
+  const response = await fetch("/api/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    return null;
+  }
+  graphDataCache.set(ticker, data);
+  return data;
+}
+
+async function updateGraphs() {
+  if (!graphSourceA || !graphSourceB) {
+    return;
+  }
+  if (!chartA) {
+    chartA = ensureChartInstance(graphAEl);
+  }
+  const tickerA = graphSourceA.value;
+  const tickerB = graphSourceB.value;
+  const seriesList = [];
+  const dateSet = new Set();
+  const rawSeries = [];
+  if (chartA && tickerA) {
+    const dataA = await fetchGraphData(tickerA);
+    if (dataA) {
+      const seriesA = buildSeries(dataA.columns, dataA.rows);
+      rawSeries.push({
+        name: tickerA,
+        dates: seriesA.dates,
+        valueMap: seriesA.valueMap,
+      });
+      seriesA.dates.forEach((date) => dateSet.add(date));
+    }
+  }
+  if (chartA && tickerB && tickerB !== tickerA) {
+    const dataB = await fetchGraphData(tickerB);
+    if (dataB) {
+      const seriesB = buildSeries(dataB.columns, dataB.rows);
+      rawSeries.push({
+        name: tickerB,
+        dates: seriesB.dates,
+        valueMap: seriesB.valueMap,
+      });
+      seriesB.dates.forEach((date) => dateSet.add(date));
+    }
+  }
+  const dates = Array.from(dateSet).sort(
+    (a, b) => Date.parse(a) - Date.parse(b)
+  );
+  rawSeries.forEach((seriesItem, index) => {
+    seriesList.push({
+      name: seriesItem.name,
+      values: dates.map((date) => seriesItem.valueMap.get(date) ?? null),
+      yAxisIndex: index,
+    });
+  });
+  if (chartA) {
+    renderGraph(chartA, dates, seriesList);
+  }
+}
+
 function computeVariationTable() {
   if (!variationTable || !cachedRawData) {
     return;
@@ -541,6 +811,8 @@ async function submitQuery(options = {}) {
     if (options.target === "data") {
       cachedRawData = { columns: data.columns, rows: data.rows };
       computeVariationTable();
+      populateGraphSelects();
+      updateGraphs();
     }
     updateTickerList(payload.ticker);
     if (newTickerInput && newTickerInput.value.trim() !== "") {
@@ -734,6 +1006,16 @@ tabButtons.forEach((button) => {
     document
       .getElementById(`tab-${tabName}`)
       .classList.add("active");
+    if (tabName === "graphs") {
+      loadGraphSettings().then(() => {
+        graphSettingsApplied = false;
+        populateGraphSelects();
+        updateGraphs();
+        if (chartA) {
+          chartA.resize();
+        }
+      });
+    }
   });
 });
 
@@ -769,6 +1051,31 @@ if (variationRange) {
     computeVariationTable();
   });
 }
+
+if (graphSourceA) {
+  graphSourceA.addEventListener("change", () => {
+    updateGraphs();
+    saveGraphSettings();
+  });
+}
+
+if (graphSourceB) {
+  graphSourceB.addEventListener("change", () => {
+    updateGraphs();
+    saveGraphSettings();
+  });
+}
+
+window.addEventListener("resize", () => {
+  if (chartA) {
+    chartA.resize();
+  }
+});
+
+loadGraphSettings().then(() => {
+  populateGraphSelects();
+  updateGraphs();
+});
 
 exportDataButton.addEventListener("click", () => {
   const csv = tableToCsv(dataTable);

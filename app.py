@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -84,6 +85,24 @@ def set_setting(key: str, value: str) -> None:
             """,
             (key, value),
         )
+
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def api_settings():
+    init_db()
+    if request.method == "GET":
+        graph_settings = get_setting("graph_settings")
+        return jsonify({"graph_settings": graph_settings})
+
+    payload = request.get_json(force=True)
+    graph_settings = payload.get("graph_settings")
+    if graph_settings is not None:
+        if isinstance(graph_settings, str):
+            stored_value = graph_settings
+        else:
+            stored_value = json.dumps(graph_settings)
+        set_setting("graph_settings", stored_value)
+    return jsonify({"ok": True})
 
 
 def fetch_tickers() -> list[str]:
