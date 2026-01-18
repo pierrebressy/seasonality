@@ -44,6 +44,7 @@
         <div class="tabs">
           <button class="tab-button active" data-tab="data">Data</button>
           <button class="tab-button" data-tab="results">Results</button>
+          <button class="tab-button" data-tab="variation">Underlying variation</button>
           <button class="tab-button" data-tab="monthly">Monthly perf by year</button>
           <button class="tab-button" data-tab="weekday">Mean weekday performance by year</button>
           <button class="tab-button" data-tab="weekday-quarter">Mean weekday performance by quarter</button>
@@ -60,6 +61,30 @@
           </div>
           <div class="table-wrap">
             <table id="results-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="tab-variation">
+          <div class="results-header">
+            <h2>Underlying variation</h2>
+          </div>
+          <div class="variation-controls">
+            <label for="variation-range">Within +/-<span id="variation-value">1</span>%</label>
+            <input
+              type="range"
+              id="variation-range"
+              name="variation-range"
+              min="0"
+              max="5"
+              step="0.1"
+              value="1"
+            />
+          </div>
+          <div class="table-wrap">
+            <table id="variation-table">
               <thead></thead>
               <tbody></tbody>
             </table>

@@ -5,6 +5,7 @@ const statusEl = document.getElementById("status");
 const currentTickerEl = document.getElementById("current-ticker");
 const resultsTable = document.getElementById("results-table");
 const dataTable = document.getElementById("data-table");
+const variationTable = document.getElementById("variation-table");
 const monthlyTable = document.getElementById("monthly-table");
 const weekdayTable = document.getElementById("weekday-table");
 const weekdayQuarterTable = document.getElementById("weekday-quarter-table");
@@ -16,6 +17,10 @@ const tabButtons = document.querySelectorAll(".tab-button");
 const tabPanels = document.querySelectorAll(".tab-panel");
 const sortStates = new Map();
 let autoRefreshTimer = null;
+let cachedRawData = null;
+let variationMeta = null;
+const variationRange = document.getElementById("variation-range");
+const variationValue = document.getElementById("variation-value");
 
 function updateTickerList(ticker) {
   if (!tickerSelect || !ticker) {
@@ -73,7 +78,7 @@ function renderTable(tableEl, columns, rows, options = {}) {
   thead.innerHTML = "";
   tbody.innerHTML = "";
 
-  const priceColumns = new Set(["open", "high", "low", "close"]);
+  const priceColumns = new Set(["open", "high", "low", "close", "lower", "higher"]);
   const percentColumns = new Set([
     "cc",
     "oc",
@@ -152,7 +157,8 @@ function renderTable(tableEl, columns, rows, options = {}) {
       indicator.textContent = sortState.direction === "asc" ? "▲" : "▼";
       th.appendChild(indicator);
     }
-    th.addEventListener("click", () => {
+    if (!options.disableSort) {
+      th.addEventListener("click", () => {
       const current =
         sortStates.get(tableEl) && sortStates.get(tableEl).index === index
           ? sortStates.get(tableEl).direction
@@ -182,8 +188,9 @@ function renderTable(tableEl, columns, rows, options = {}) {
       });
 
       sortStates.set(tableEl, { index, direction: next });
-      renderTable(tableEl, columns, sorted);
-    });
+      renderTable(tableEl, columns, sorted, options);
+      });
+    }
     headRow.appendChild(th);
   });
   thead.appendChild(headRow);
@@ -229,6 +236,251 @@ function renderTable(tableEl, columns, rows, options = {}) {
   });
 }
 
+function lowerBound(sortedValues, target) {
+  let left = 0;
+  let right = sortedValues.length;
+  while (left < right) {
+    const mid = Math.floor((left + right) / 2);
+    if (sortedValues[mid] < target) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  return left;
+}
+
+function upperBound(sortedValues, target) {
+  let left = 0;
+  let right = sortedValues.length;
+  while (left < right) {
+    const mid = Math.floor((left + right) / 2);
+    if (sortedValues[mid] <= target) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  return left;
+}
+
+function createSegmentTree(size, initialValue, combine) {
+  let n = 1;
+  while (n < size) {
+    n *= 2;
+  }
+  const tree = new Array(2 * n).fill(initialValue);
+  return {
+    update(index, value) {
+      let i = index + n;
+      tree[i] = value;
+      i = Math.floor(i / 2);
+      while (i >= 1) {
+        tree[i] = combine(tree[i * 2], tree[i * 2 + 1]);
+        i = Math.floor(i / 2);
+      }
+    },
+    query(left, right) {
+      if (right < left) {
+        return initialValue;
+      }
+      let l = left + n;
+      let r = right + n;
+      let result = initialValue;
+      while (l <= r) {
+        if (l % 2 === 1) {
+          result = combine(result, tree[l]);
+          l += 1;
+        }
+        if (r % 2 === 0) {
+          result = combine(result, tree[r]);
+          r -= 1;
+        }
+        l = Math.floor(l / 2);
+        r = Math.floor(r / 2);
+      }
+      return result;
+    },
+  };
+}
+
+function updateVariationValueDisplay(value) {
+  if (variationValue) {
+    variationValue.textContent = Number.isFinite(value) ? value.toFixed(1) : "1";
+  }
+}
+
+function computeVariationTable() {
+  if (!variationTable || !cachedRawData) {
+    return;
+  }
+  const { columns, rows } = cachedRawData;
+  const dateIndex = columns.indexOf("date");
+  const closeIndex = columns.indexOf("close");
+  if (dateIndex === -1 || closeIndex === -1) {
+    clearTable(variationTable);
+    return;
+  }
+  const percent = variationRange ? Number(variationRange.value || 1) : 1;
+  updateVariationValueDisplay(percent);
+  const orderedRows = rows
+    .map((row, rowIndex) => {
+      const dateValue = row[dateIndex];
+      const timestamp = Date.parse(dateValue);
+      return {
+        row,
+        rowIndex,
+        dateValue,
+        timestamp: Number.isNaN(timestamp) ? rowIndex : timestamp,
+        closeValue: Number(row[closeIndex]),
+      };
+    })
+    .sort((a, b) => a.timestamp - b.timestamp);
+  const closes = orderedRows.map((entry) => entry.closeValue);
+  const dates = orderedRows.map((entry) => entry.dateValue);
+  const lows = new Array(orderedRows.length).fill(null);
+  const highs = new Array(orderedRows.length).fill(null);
+  const uniqueCloses = Array.from(
+    new Set(closes.filter((value) => Number.isFinite(value)))
+  ).sort((a, b) => a - b);
+  const timestamps = orderedRows.map((entry, index) => {
+    const parsed = Date.parse(entry.dateValue);
+    return Number.isNaN(parsed) ? index * 86400000 : parsed;
+  });
+  const pastTree = createSegmentTree(uniqueCloses.length, -1, Math.max);
+  const futureTree = createSegmentTree(uniqueCloses.length, Infinity, Math.min);
+  const futureOffsets = new Array(orderedRows.length).fill(0);
+
+  for (let i = orderedRows.length - 1; i >= 0; i -= 1) {
+    const closeValue = closes[i];
+    if (!Number.isFinite(closeValue)) {
+      continue;
+    }
+    const tolerance = percent / 100;
+    const low = closeValue * (1 - tolerance);
+    const high = closeValue * (1 + tolerance);
+    lows[i] = low;
+    highs[i] = high;
+    const left = lowerBound(uniqueCloses, low);
+    const right = upperBound(uniqueCloses, high) - 1;
+    const futureIndex = futureTree.query(left, right);
+    if (Number.isFinite(futureIndex)) {
+      const diffMs = timestamps[futureIndex] - timestamps[i];
+      futureOffsets[i] = Math.round(diffMs / 86400000);
+    } else {
+      futureOffsets[i] = 0;
+    }
+    const closeIdx = lowerBound(uniqueCloses, closeValue);
+    futureTree.update(closeIdx, i);
+  }
+
+  const outputRows = orderedRows.map((entry, index) => {
+    const row = entry.row;
+    const closeValue = closes[index];
+    let pastMatches = 0;
+    let futureMatches = futureOffsets[index];
+    let lower = "";
+    let higher = "";
+    if (Number.isFinite(closeValue)) {
+      const tolerance = percent / 100;
+      const low = closeValue * (1 - tolerance);
+      const high = closeValue * (1 + tolerance);
+      lower = low;
+      higher = high;
+      const left = lowerBound(uniqueCloses, low);
+      const right = upperBound(uniqueCloses, high) - 1;
+      const pastIndex = pastTree.query(left, right);
+      if (pastIndex >= 0) {
+        const diffMs = timestamps[index] - timestamps[pastIndex];
+        pastMatches = Math.round(diffMs / 86400000);
+      } else {
+        pastMatches = 0;
+      }
+      const closeIdx = lowerBound(uniqueCloses, closeValue);
+      pastTree.update(closeIdx, index);
+    }
+    return [
+      dates[index],
+      row[closeIndex],
+      lower,
+      higher,
+      pastMatches,
+      futureMatches,
+    ];
+  });
+
+  const outputColumns = [
+    "date",
+    "close",
+    "lower",
+    "higher",
+    `past days within +/-${percent.toFixed(1)}%`,
+    `future days within +/-${percent.toFixed(1)}%`,
+  ];
+  renderTable(variationTable, outputColumns, outputRows, { disableSort: true });
+  const rowNodes = variationTable.querySelectorAll("tbody tr");
+  rowNodes.forEach((rowNode, index) => {
+    rowNode.dataset.index = String(index);
+    const closeCell = rowNode.children[1];
+    if (closeCell) {
+      closeCell.dataset.role = "variation-close";
+    }
+  });
+  variationMeta = {
+    closes,
+    lows,
+    highs,
+  };
+}
+
+function clearVariationHighlights() {
+  if (!variationTable) {
+    return;
+  }
+  variationTable
+    .querySelectorAll(".variation-match-past, .variation-match-future, .variation-match-current")
+    .forEach((cell) => {
+      cell.classList.remove(
+        "variation-match-past",
+        "variation-match-future",
+        "variation-match-current"
+      );
+    });
+}
+
+function applyVariationHighlights(targetIndex) {
+  if (!variationTable || !variationMeta) {
+    return;
+  }
+  const low = variationMeta.lows[targetIndex];
+  const high = variationMeta.highs[targetIndex];
+  if (!Number.isFinite(low) || !Number.isFinite(high)) {
+    clearVariationHighlights();
+    return;
+  }
+  const rowNodes = variationTable.querySelectorAll("tbody tr");
+  rowNodes.forEach((rowNode, index) => {
+    const closeValue = variationMeta.closes[index];
+    if (!Number.isFinite(closeValue)) {
+      return;
+    }
+    if (closeValue < low || closeValue > high) {
+      return;
+    }
+    const closeCell = rowNode.children[1];
+    if (!closeCell) {
+      return;
+    }
+    if (index < targetIndex) {
+      closeCell.classList.add("variation-match-past");
+    } else if (index > targetIndex) {
+      closeCell.classList.add("variation-match-future");
+    } else {
+      closeCell.classList.add("variation-match-current");
+    }
+  });
+}
+
 function buildPayload(options = {}) {
   const formData = new FormData(form);
   const newTicker = String(formData.get("new_ticker") || "").trim();
@@ -263,6 +515,10 @@ async function submitQuery(options = {}) {
       statusEl.textContent = data.error || "Request failed.";
       const targetTable = options.target === "data" ? dataTable : resultsTable;
       clearTable(targetTable);
+      if (options.target === "data") {
+        cachedRawData = null;
+        clearTable(variationTable);
+      }
       return false;
     }
 
@@ -281,6 +537,10 @@ async function submitQuery(options = {}) {
       const resolved = data.resolved_ticker || payload.ticker;
       currentTickerEl.textContent = `Ticker: ${resolved}`;
     }
+    if (options.target === "data") {
+      cachedRawData = { columns: data.columns, rows: data.rows };
+      computeVariationTable();
+    }
     updateTickerList(payload.ticker);
     if (newTickerInput && newTickerInput.value.trim() !== "") {
       newTickerInput.value = "";
@@ -290,6 +550,10 @@ async function submitQuery(options = {}) {
     statusEl.textContent = "Unable to reach the API.";
     const targetTable = options.target === "data" ? dataTable : resultsTable;
     clearTable(targetTable);
+    if (options.target === "data") {
+      cachedRawData = null;
+      clearTable(variationTable);
+    }
     return false;
   }
 }
@@ -404,6 +668,9 @@ window.addEventListener("DOMContentLoaded", () => {
   submitMonthly();
   submitWeekday();
   submitWeekdayQuarter();
+  if (variationRange) {
+    updateVariationValueDisplay(Number(variationRange.value || 1));
+  }
 });
 
 form.addEventListener("change", (event) => {
@@ -435,6 +702,39 @@ tabButtons.forEach((button) => {
       .classList.add("active");
   });
 });
+
+if (variationTable) {
+  variationTable.addEventListener("mouseover", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (target.dataset.role !== "variation-close") {
+      return;
+    }
+    const row = target.closest("tr");
+    if (!row || row.dataset.index === undefined) {
+      return;
+    }
+    const index = Number(row.dataset.index);
+    if (!Number.isFinite(index)) {
+      return;
+    }
+    clearVariationHighlights();
+    applyVariationHighlights(index);
+  });
+
+  variationTable.addEventListener("mouseleave", () => {
+    clearVariationHighlights();
+  });
+}
+
+if (variationRange) {
+  variationRange.addEventListener("input", () => {
+    updateVariationValueDisplay(Number(variationRange.value || 1));
+    computeVariationTable();
+  });
+}
 
 exportDataButton.addEventListener("click", () => {
   const csv = tableToCsv(dataTable);

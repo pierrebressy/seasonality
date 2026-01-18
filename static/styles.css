@@ -130,6 +130,18 @@ button:hover {
   color: var(--ink);
 }
 
+.variation-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-family: "Space Grotesk", "Arial", sans-serif;
+}
+
+.variation-controls input[type="range"] {
+  flex: 1;
+}
+
 .tab-button {
   padding: 8px 14px;
   border-radius: 999px;
@@ -211,6 +223,19 @@ td:first-child {
 
 tbody tr:nth-child(even) {
   background: #faf5ec;
+}
+
+.variation-match-past {
+  background: #e6f0ff;
+}
+
+.variation-match-future {
+  background: #e6f7ef;
+}
+
+.variation-match-current {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 @media (max-width: 960px) {
