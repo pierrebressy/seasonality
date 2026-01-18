@@ -96,7 +96,22 @@ function renderTable(tableEl, columns, rows, options = {}) {
     "lower",
     "higher",
     "^VIX",
+    "^VIX9D",
     "^VIX3M",
+    "^VIX6M",
+    "SKEW",
+    "DEX S",
+    "DEX T",
+    "VOL I",
+  ]);
+  const ratioColumns = new Set([
+    "C/B",
+    "VIX9D / VIX",
+    "VIX 9D / VIX 3M",
+    "VIX 9D / VIX 6M",
+    "VIX / VIX 3M",
+    "VIX / VIX 6M",
+    "VIX 3M / VIX 6M",
   ]);
   const percentColumns = new Set([
     "cc",
@@ -254,7 +269,7 @@ function renderTable(tableEl, columns, rows, options = {}) {
         tr.appendChild(td);
         return;
       }
-      if (colNameText === "C/B" && cell !== "") {
+      if (ratioColumns.has(colNameText) && cell !== "") {
         td.textContent = Number.isFinite(number) ? number.toFixed(2) : cell;
         if (options.decorateCell) {
           options.decorateCell(td, colNameText, cell, row, rowIndex);
@@ -1075,6 +1090,10 @@ tabButtons.forEach((button) => {
     document
       .getElementById(`tab-${tabName}`)
       .classList.add("active");
+    if (currentTickerEl) {
+      currentTickerEl.style.display =
+        tabName === "vix" || tabName === "graphs" ? "none" : "";
+    }
     if (tabName === "graphs") {
       loadGraphSettings().then(() => {
         graphSettingsApplied = false;

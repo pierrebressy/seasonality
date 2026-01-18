@@ -791,14 +791,67 @@ def api_weekday():
 def api_vix():
     init_db()
     vix = fetch_all_from_db("^VIX")
+    vix9d = fetch_all_from_db("^VIX9D")
     vix3m = fetch_all_from_db("^VIX3M")
-    if vix.empty or vix3m.empty:
+    vix6m = fetch_all_from_db("^VIX6M")
+    skew = fetch_all_from_db("^SKEW")
+    sdex = fetch_all_from_db("^SDEX")
+    tdex = fetch_all_from_db("^TDEX")
+    voli = fetch_all_from_db("^VOLI")
+    if (
+        vix.empty
+        or vix3m.empty
+        or vix9d.empty
+        or vix6m.empty
+        or skew.empty
+        or sdex.empty
+        or tdex.empty
+        or voli.empty
+    ):
         return jsonify({"error": "missing VIX data"}), 404
     vix = vix[["date", "close"]].rename(columns={"close": "^VIX"})
+    vix9d = vix9d[["date", "close"]].rename(columns={"close": "^VIX9D"})
     vix3m = vix3m[["date", "close"]].rename(columns={"close": "^VIX3M"})
-    merged = pd.merge(vix, vix3m, on="date", how="inner").sort_values("date")
+    vix6m = vix6m[["date", "close"]].rename(columns={"close": "^VIX6M"})
+    skew = skew[["date", "close"]].rename(columns={"close": "SKEW"})
+    sdex = sdex[["date", "close"]].rename(columns={"close": "DEX S"})
+    tdex = tdex[["date", "close"]].rename(columns={"close": "DEX T"})
+    voli = voli[["date", "close"]].rename(columns={"close": "VOL I"})
+    merged = (
+        vix.merge(vix9d, on="date", how="inner")
+        .merge(vix3m, on="date", how="inner")
+        .merge(vix6m, on="date", how="inner")
+        .merge(skew, on="date", how="inner")
+        .merge(sdex, on="date", how="inner")
+        .merge(tdex, on="date", how="inner")
+        .merge(voli, on="date", how="inner")
+        .sort_values("date")
+    )
+    merged["VIX9D / VIX"] = merged["^VIX9D"] / merged["^VIX"]
+    merged["VIX 9D / VIX 3M"] = merged["^VIX9D"] / merged["^VIX3M"]
+    merged["VIX 9D / VIX 6M"] = merged["^VIX9D"] / merged["^VIX6M"]
+    merged["VIX / VIX 3M"] = merged["^VIX"] / merged["^VIX3M"]
+    merged["VIX / VIX 6M"] = merged["^VIX"] / merged["^VIX6M"]
+    merged["VIX 3M / VIX 6M"] = merged["^VIX3M"] / merged["^VIX6M"]
     merged["C/B"] = merged["^VIX"] / merged["^VIX3M"]
-    columns = ["date", "^VIX", "^VIX3M", "C/B"]
+    columns = [
+        "date",
+        "^VIX",
+        "^VIX9D",
+        "^VIX3M",
+        "^VIX6M",
+        "SKEW",
+        "DEX S",
+        "DEX T",
+        "VOL I",
+        "C/B",
+        "VIX9D / VIX",
+        "VIX 9D / VIX 3M",
+        "VIX 9D / VIX 6M",
+        "VIX / VIX 3M",
+        "VIX / VIX 6M",
+        "VIX 3M / VIX 6M",
+    ]
     rows = (
         merged[columns]
         .astype(object)
