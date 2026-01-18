@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yfinance as yf
 from flask import Flask, jsonify, render_template, request
@@ -219,9 +220,159 @@ def compute_features(frame: pd.DataFrame) -> pd.DataFrame:
         semester_sizes - frame["trading day of the semester"]
     ).astype(int)
     frame["week"] = frame["date"].dt.isocalendar().week.astype(int)
+
+    def third_friday(year: int, month: int) -> datetime.date:
+        first = datetime(year, month, 1)
+        days_until_friday = (4 - first.weekday()) % 7
+        return (first + timedelta(days=days_until_friday + 14)).date()
+
+    dates = frame["date"].dt.date
+    months = frame["date"].dt.month
+    years = frame["date"].dt.year
+    current_tw = [
+        third_friday(year, month) for year, month in zip(years, months)
+    ]
+    current_tw = pd.Series(current_tw, index=frame.index)
+    before_or_on = dates <= current_tw
+    next_tw = current_tw.copy()
+    next_month = months + 1
+    next_year = years + (next_month > 12).astype(int)
+    next_month = ((next_month - 1) % 12) + 1
+    next_tw_after = [
+        third_friday(year, month) for year, month in zip(next_year, next_month)
+    ]
+    next_tw.loc[~before_or_on] = pd.Series(next_tw_after, index=frame.index)[
+        ~before_or_on
+    ]
+
+    prev_month = months - 1
+    prev_year = years - (prev_month < 1).astype(int)
+    prev_month = ((prev_month - 1) % 12) + 1
+    prev_tw = [
+        third_friday(year, month) for year, month in zip(prev_year, prev_month)
+    ]
+    prev_tw = pd.Series(prev_tw, index=frame.index)
+    prev_tw.loc[~before_or_on] = current_tw[~before_or_on]
+
+    date_values = frame["date"].values.astype("datetime64[D]")
+    next_tw_values = pd.to_datetime(next_tw).values.astype("datetime64[D]")
+    prev_tw_values = pd.to_datetime(prev_tw).values.astype("datetime64[D]")
+    current_pos = np.arange(len(frame))
+    next_positions = np.searchsorted(date_values, next_tw_values, side="left")
+    prev_positions = np.searchsorted(date_values, prev_tw_values, side="left")
+    next_positions = np.where(next_positions >= len(frame), -1, next_positions)
+    prev_positions = np.where(prev_positions >= len(frame), -1, prev_positions)
+
+    remaining_before_tw = np.where(
+        next_positions >= 0,
+        np.maximum(next_positions - current_pos, 0),
+        np.nan,
+    )
+    elapsed_since_tw = np.where(
+        prev_positions >= 0,
+        np.maximum(current_pos - prev_positions, 0),
+        np.nan,
+    )
+
+    quarter_month = ((months - 1) // 3 + 1) * 3
+    current_q_tw = [
+        third_friday(year, month) for year, month in zip(years, quarter_month)
+    ]
+    current_q_tw = pd.Series(current_q_tw, index=frame.index)
+    before_or_on_q = dates <= current_q_tw
+    next_q_tw = current_q_tw.copy()
+    next_quarter_month = quarter_month + 3
+    next_quarter_year = years + (next_quarter_month > 12).astype(int)
+    next_quarter_month = ((next_quarter_month - 1) % 12) + 1
+    next_q_tw_after = [
+        third_friday(year, month)
+        for year, month in zip(next_quarter_year, next_quarter_month)
+    ]
+    next_q_tw.loc[~before_or_on_q] = pd.Series(
+        next_q_tw_after, index=frame.index
+    )[~before_or_on_q]
+
+    prev_quarter_month = quarter_month - 3
+    prev_quarter_year = years - (prev_quarter_month < 1).astype(int)
+    prev_quarter_month = ((prev_quarter_month - 1) % 12) + 1
+    prev_q_tw = [
+        third_friday(year, month)
+        for year, month in zip(prev_quarter_year, prev_quarter_month)
+    ]
+    prev_q_tw = pd.Series(prev_q_tw, index=frame.index)
+    prev_q_tw.loc[~before_or_on_q] = current_q_tw[~before_or_on_q]
+
+    next_q_tw_values = pd.to_datetime(next_q_tw).values.astype("datetime64[D]")
+    prev_q_tw_values = pd.to_datetime(prev_q_tw).values.astype("datetime64[D]")
+    next_q_positions = np.searchsorted(date_values, next_q_tw_values, side="left")
+    prev_q_positions = np.searchsorted(date_values, prev_q_tw_values, side="left")
+    next_q_positions = np.where(next_q_positions >= len(frame), -1, next_q_positions)
+    prev_q_positions = np.where(prev_q_positions >= len(frame), -1, prev_q_positions)
+
+    remaining_before_q_tw = np.where(
+        next_q_positions >= 0,
+        np.maximum(next_q_positions - current_pos, 0),
+        np.nan,
+    )
+    elapsed_since_q_tw = np.where(
+        prev_q_positions >= 0,
+        np.maximum(current_pos - prev_q_positions, 0),
+        np.nan,
+    )
+
+    frame["3 🧙 date"] = pd.to_datetime(next_tw).dt.strftime("%Y-%m-%d")
+    frame["trading days remaining before 3 🧙"] = (
+        pd.Series(remaining_before_tw, index=frame.index).astype("Int64")
+    )
+    frame["trading days elapsed since 3 🧙"] = (
+        pd.Series(elapsed_since_tw, index=frame.index).astype("Int64")
+    )
+    frame["4 🧙 date"] = pd.to_datetime(next_q_tw).dt.strftime("%Y-%m-%d")
+    frame["trading days remaining before 4 🧙"] = pd.Series(
+        remaining_before_q_tw, index=frame.index
+    ).astype("Int64")
+    frame["trading days elapsed since 4 🧙"] = pd.Series(
+        elapsed_since_q_tw, index=frame.index
+    ).astype("Int64")
     frame["cc"] = (frame["close"] / frame["close"].shift(1) - 1.0) * 100.0
     frame["oc"] = (frame["close"] / frame["open"] - 1.0) * 100.0
     frame["co"] = (frame["open"] / frame["close"].shift(1) - 1.0) * 100.0
+    oo = (frame["open"] / frame["open"].shift(1) - 1.0) * 100.0
+    hh = (frame["high"] / frame["high"].shift(1) - 1.0) * 100.0
+    ll = (frame["low"] / frame["low"].shift(1) - 1.0) * 100.0
+
+    def compute_streaks(series: pd.Series, positive: bool) -> pd.Series:
+        mask = series.gt(0) if positive else series.lt(0)
+        streak = mask.groupby((mask != mask.shift()).cumsum()).cumcount() + 1
+        return streak.where(mask, 0).astype(int)
+
+    def compute_mask_streaks(mask: pd.Series) -> pd.Series:
+        streak = mask.groupby((mask != mask.shift()).cumsum()).cumcount() + 1
+        return streak.where(mask, 0).astype(int)
+
+    frame["bullish run oo"] = compute_streaks(oo, positive=True)
+    frame["bullish run oc"] = compute_streaks(frame["oc"], positive=True)
+    frame["bullish run hh"] = compute_streaks(hh, positive=True)
+    frame["bullish run ll"] = compute_streaks(ll, positive=True)
+    frame["bearish run oo"] = compute_streaks(oo, positive=False)
+    frame["bearish run oc"] = compute_streaks(frame["oc"], positive=False)
+    frame["bearish run hh"] = compute_streaks(hh, positive=False)
+    frame["bearish run ll"] = compute_streaks(ll, positive=False)
+    ath_open = frame["open"].cummax()
+    ath_high = frame["high"].cummax()
+    ath_close = frame["close"].cummax()
+    frame["ath open"] = frame["open"].eq(ath_open).astype(int)
+    frame["ath high"] = frame["high"].eq(ath_high).astype(int)
+    frame["ath close"] = frame["close"].eq(ath_close).astype(int)
+    frame["consecutive ath open"] = compute_mask_streaks(
+        frame["open"].eq(ath_open)
+    )
+    frame["consecutive ath high"] = compute_mask_streaks(
+        frame["high"].eq(ath_high)
+    )
+    frame["consecutive ath close"] = compute_mask_streaks(
+        frame["close"].eq(ath_close)
+    )
     for period in (2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 30, 42, 63, 84, 105, 126):
         frame[f"cc -{period}"] = frame["close"].pct_change(period) * 100.0
         frame[f"cc +{period}"] = frame["close"].pct_change(-period) * 100.0
@@ -245,9 +396,29 @@ def compute_features(frame: pd.DataFrame) -> pd.DataFrame:
         "remaining trading days in the trimester",
         "trading day of the semester",
         "remaining trading days in the semester",
+        "3 🧙 date",
+        "trading days remaining before 3 🧙",
+        "trading days elapsed since 3 🧙",
+        "4 🧙 date",
+        "trading days remaining before 4 🧙",
+        "trading days elapsed since 4 🧙",
         "oc",
         "cc",
         "co",
+        "bullish run oo",
+        "bullish run oc",
+        "bullish run hh",
+        "bullish run ll",
+        "bearish run oo",
+        "bearish run oc",
+        "bearish run hh",
+        "bearish run ll",
+        "ath open",
+        "ath high",
+        "ath close",
+        "consecutive ath open",
+        "consecutive ath high",
+        "consecutive ath close",
         "cc -2",
         "cc -3",
         "cc -4",
@@ -474,7 +645,11 @@ def api_data():
             columns=["high", "low", "volume"], errors="ignore"
         )
         columns = enriched.columns.tolist()
-        rows = enriched.fillna("").values.tolist()
+        rows = (
+            enriched.astype(object)
+            .where(pd.notna(enriched), "")
+            .values.tolist()
+        )
 
     return jsonify(
         {

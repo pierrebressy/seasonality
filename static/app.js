@@ -9,6 +9,7 @@ const monthlyTable = document.getElementById("monthly-table");
 const weekdayTable = document.getElementById("weekday-table");
 const weekdayQuarterTable = document.getElementById("weekday-quarter-table");
 const exportDataButton = document.getElementById("export-data");
+const exportResultsButton = document.getElementById("export-results");
 const tickerSelect = document.getElementById("ticker-select");
 const newTickerInput = document.querySelector("input[name='new_ticker']");
 const tabButtons = document.querySelectorAll(".tab-button");
@@ -443,5 +444,16 @@ exportDataButton.addEventListener("click", () => {
   }
   const ticker = tickerSelect ? tickerSelect.value : "data";
   const filename = `${ticker}_data.csv`;
+  downloadCsv(filename, csv);
+});
+
+exportResultsButton.addEventListener("click", () => {
+  const csv = tableToCsv(resultsTable);
+  if (!csv.trim()) {
+    statusEl.textContent = "No results to export.";
+    return;
+  }
+  const ticker = tickerSelect ? tickerSelect.value : "results";
+  const filename = `${ticker}_results.csv`;
   downloadCsv(filename, csv);
 });
